@@ -20,7 +20,7 @@ This project utilizes the **AI4I 2020 Predictive Maintenance Dataset**, a synthe
 
 ## 📂 Project Structure
 
-```text
+
 predictive-maintenance-clustering/
 ├── data/
 │   ├── raw/            # Immutable, original data source (e.g., ai4i2020.csv)
