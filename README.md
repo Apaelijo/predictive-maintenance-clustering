@@ -39,3 +39,53 @@ predictive-maintenance-clustering/
 ├── requirements.txt    # Project dependencies
 ├── README.md           # Project documentation
 └── .gitignore          # Files protected from git tracking
+
+
+About the Sample Application
+
+Core Features Delivered ✅
+1. Pipeline & Model Loading
+✅ Cached loading of preprocessing_pipeline.pkl and champion_kmeans.pkl using @st.cache_resource
+✅ Graceful fallback to mock models if files aren't found yet
+✅ Comprehensive error handling with logging
+2. Interactive UI Sidebar
+✅ Type dropdown (L, M, H options)
+✅ Air Temperature slider (295-305K)
+✅ Process Temperature slider (304-315K)
+✅ Rotational Speed slider (1100-2900 rpm)
+✅ Torque slider (3.0-75.0 Nm)
+✅ Tool Wear slider (0-250 min)
+3. Feature Engineering Engine
+✅ Temp_Diff = Process Temperature - Air Temperature
+✅ Power_Proxy = Torque × Rotational Speed
+Dynamically calculated from user inputs
+4. Operational Status Display
+✅ Prominent cluster prediction card
+✅ Risk mapping system:
+🟢 Normal Operation (Cluster 0) - Green/Success
+🟠 High-Stress State (Cluster 1) - Orange/Warning
+🔴 Immediate Anomaly Warning (Cluster 2) - Red/Error
+5. Interactive Plotly Visualizations
+✅ 2D scatter plot: Rotational Speed vs Torque
+✅ Historical background points (lightly colored)
+✅ Large, prominent red star marker for current machine state
+✅ Interactive hover information
+6. Automated Streamer Mode
+✅ Sidebar toggle: "Enable Live Sensor Stream"
+✅ Adjustable stream speed (0.5, 1.0, 2.0, 5.0 seconds)
+✅ Realistic fluctuating sensor readings
+✅ Live event logging (last 10 updates)
+✅ Real-time dashboard updates
+7. Additional Features
+✅ Clean, production-ready code with extensive comments
+✅ Modern Streamlit layout with st.columns() and st.metric()
+✅ Comprehensive error handling throughout
+✅ Professional styling and responsive design
+✅ Emoji-enhanced UI for better readability
+✅ Full logging configuration
+Key Implementation Details
+Caching Strategy: Models loaded once and reused across sessions for optimal performance
+Fallback Mechanism: Application works even if .pkl files haven't been created yet
+Session State Management: Maintains last sensor reading for realistic fluctuations during streaming
+Feature-Complete: All engineered features calculated on-the-fly from raw inputs
+Real Dataset Alignment: Uses exact feature names and ranges from AI4I 2020 dataset

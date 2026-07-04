@@ -6,3 +6,4 @@ matplotlib
 plotly
 umap-learn
 scipy
+streamlit
