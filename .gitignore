@@ -1,0 +1,13 @@
+# Data and models (Keep your repo lightweight)
+data/
+models/*.pkl
+models/*.h5
+models/*.gmm
+
+# Python environment & cache clutter
+__pycache__/
+*.pyc
+.venv/
+env/
+.ipynb_checkpoints/
+.DS_Store
