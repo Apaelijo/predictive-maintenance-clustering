@@ -15,7 +15,7 @@ Author: Predictive Maintenance Team
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
+import joblib
 import time
 from pathlib import Path
 from typing import Tuple, Dict, Optional
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Define project root for relative imports
-PROJECT_ROOT = Path(__file__).resolve().parents[1].parent
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Model paths
 SCALER_PATH = PROJECT_ROOT / "notebooks" / "models" / "preprocessing_pipeline.pkl"
@@ -52,11 +52,15 @@ TYPE_OPTIONS = ['L', 'M', 'H']
 
 # Risk mapping: cluster_id -> (status_label, color, severity)
 RISK_MAPPING = {
-    0: ("Normal Operation", "success", 0),
-    1: ("High-Stress State", "warning", 1),
-    2: ("Immediate Anomaly Warning", "error", 2),
+    0: ("Stable Operating Regime", "success", 0),
+    1: ("Elevated Wear Risk", "warning", 1),
+    2: ("Anomaly Detected - Immediate Review", "error", 2),
 }
 
+# If the trained model uses more than three clusters, you can extend this mapping
+# or rely on the dynamic fallback in `predict_cluster` below which will produce
+# a sensible informational label for any unmapped cluster id.
+RISK_MAPPING[3] = ("High-Risk Operating Regime", "warning", 1)
 # ============================================================================
 # MODEL LOADING & CACHING
 # ============================================================================
@@ -76,8 +80,7 @@ def load_preprocessing_pipeline():
             logger.info("Using fallback mock pipeline...")
             return _create_fallback_pipeline()
         
-        with open(SCALER_PATH, 'rb') as f:
-            pipeline = pickle.load(f)
+        pipeline = joblib.load(SCALER_PATH)
         logger.info("✓ Preprocessing pipeline loaded successfully")
         return pipeline
     
@@ -102,8 +105,7 @@ def load_kmeans_model():
             logger.info("Using fallback mock model...")
             return _create_fallback_kmeans()
         
-        with open(KMEANS_PATH, 'rb') as f:
-            model = pickle.load(f)
+        model = joblib.load(KMEANS_PATH)
         logger.info("✓ K-Means model loaded successfully")
         return model
     
@@ -276,67 +278,81 @@ def render_sidebar_telemetry_controls() -> Dict[str, float]:
     Returns:
         Dictionary of user-selected sensor readings
     """
-    st.sidebar.header("⚙️ Machine Telemetry Control Panel")
-    st.sidebar.markdown("---")
-    
-    # Type dropdown
-    machine_type = st.sidebar.selectbox(
-        "🏭 Machine Type",
-        options=TYPE_OPTIONS,
-        help="Machine profile: Low (L), Medium (M), or High (H) stress configuration"
-    )
-    
-    st.sidebar.markdown("### 📊 Sensor Readings")
-    
-    # Air Temperature slider
-    air_temp = st.sidebar.slider(
-        "🌡️ Air Temperature [K]",
-        min_value=295.0,
-        max_value=305.0,
-        value=300.0,
-        step=0.5,
-        help="Ambient air temperature around the machine"
-    )
-    
-    # Process Temperature slider
-    process_temp = st.sidebar.slider(
-        "🔥 Process Temperature [K]",
-        min_value=304.0,
-        max_value=315.0,
-        value=310.0,
-        step=0.5,
-        help="Core operating temperature of the machine"
-    )
-    
-    # Rotational Speed slider
-    rot_speed = st.sidebar.slider(
-        "⚡ Rotational Speed [rpm]",
-        min_value=1100,
-        max_value=2900,
-        value=1500,
-        step=50,
-        help="Spindle/motor rotation speed"
-    )
-    
-    # Torque slider
-    torque = st.sidebar.slider(
-        "🔧 Torque [Nm]",
-        min_value=3.0,
-        max_value=75.0,
-        value=40.0,
-        step=1.0,
-        help="Rotational force applied by the spindle"
-    )
-    
-    # Tool Wear slider
-    tool_wear = st.sidebar.slider(
-        "⏱️ Tool Wear [min]",
-        min_value=0,
-        max_value=250,
-        value=100,
-        step=5,
-        help="Cumulative tool wear in minutes of operation"
-    )
+    with st.sidebar.expander("⚙️ Machine Telemetry Input Panel", expanded=False):
+        st.markdown("### 📊 Sensor Readings")
+
+        def _parse_numeric_input(value: str, default: float, cast_type):
+            try:
+                return cast_type(value)
+            except (TypeError, ValueError):
+                return default
+
+        # Type dropdown
+        machine_type = st.selectbox(
+            "🏭 Machine Type",
+            options=TYPE_OPTIONS,
+            help="Machine profile: Low (L), Medium (M), or High (H) stress configuration"
+        )
+
+        # Air Temperature text input
+        air_temp = _parse_numeric_input(
+            st.text_input(
+                "🌡️ Air Temperature [K]",
+                value="300.0",
+                help="Ambient air temperature around the machine"
+            ),
+            300.0,
+            float,
+        )
+
+        # Process Temperature text input
+        process_temp = _parse_numeric_input(
+            st.text_input(
+                "🔥 Process Temperature [K]",
+                value="310.0",
+                help="Core operating temperature of the machine"
+            ),
+            310.0,
+            float,
+        )
+
+        # Rotational Speed text input
+        rot_speed = _parse_numeric_input(
+            st.text_input(
+                "⚡ Rotational Speed [rpm]",
+                value="1500",
+                help="Spindle/motor rotation speed"
+            ),
+            1500,
+            int,
+        )
+
+        # Torque text input
+        torque = _parse_numeric_input(
+            st.text_input(
+                "🔧 Torque [Nm]",
+                value="40.0",
+                help="Rotational force applied by the spindle"
+            ),
+            40.0,
+            float,
+        )
+
+        # Tool Wear text input
+        tool_wear = _parse_numeric_input(
+            st.text_input(
+                "⏱️ Tool Wear [min]",
+                value="100",
+                help="Cumulative tool wear in minutes of operation"
+            ),
+            100,
+            int,
+        )
+
+        deploy_clicked = st.button("Apply Inputs", use_container_width=True, key="deploy_panel")
+        if deploy_clicked:
+            st.session_state["deploy_requested"] = True
+            st.toast("Current telemetry inputs applied")
     
     # Assemble sensor dictionary
     sensor_data = {
@@ -349,6 +365,26 @@ def render_sidebar_telemetry_controls() -> Dict[str, float]:
     }
     
     return sensor_data
+
+
+def render_metric_card(icon: str, title: str, value: str, detail: Optional[str] = None):
+    """Render a compact metric tile with icon, title, and value on one line."""
+    detail_html = f"<div style='font-size:0.78rem; color:#6b7280; margin-top:4px;'>{detail}</div>" if detail else ""
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; background:#f8fafc; min-height:74px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <div style="font-size:1.1rem;">{icon}</div>
+                <div style="flex:1; min-width:0;">
+                    <div style="font-size:0.8rem; color:#6b7280;">{title}</div>
+                    <div style="font-size:1.02rem; font-weight:600; color:#111827;">{value}</div>
+                </div>
+            </div>
+            {detail_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_operational_status(cluster_id: int, risk_label: str, risk_color: str):
@@ -365,79 +401,56 @@ def render_operational_status(cluster_id: int, risk_label: str, risk_color: str)
     with col2:
         st.markdown("---")
         st.metric(
-            label="🎯 Operational Cluster",
-            value=f"Cluster {cluster_id}",
+            label="🎯 Detected Operating Regime",
+            value=f"Regime {cluster_id}",
             delta=risk_label if risk_label != "Prediction Error" else None,
             delta_color="normal"
         )
-        
-        # Render alert badge
+
         if risk_color == "success":
             st.success(f"✅ {risk_label}")
+            st.caption("Maintenance action: Continue routine monitoring and schedule standard inspections.")
         elif risk_color == "warning":
             st.warning(f"⚠️ {risk_label}")
+            st.caption("Maintenance action: Review wear indicators and plan a targeted inspection.")
         elif risk_color == "error":
             st.error(f"🚨 {risk_label}")
+            st.caption("Maintenance action: Escalate for immediate investigation and intervention.")
         else:
             st.info(f"ℹ️ {risk_label}")
-        
+            st.caption("Maintenance action: Validate the input and reassess the operating state.")
+
         st.markdown("---")
 
 
 def render_telemetry_metrics(sensor_data: Dict[str, float]):
     """
-    Display key telemetry metrics in a grid layout.
+    Display key telemetry metrics in a compact 3x2 grid layout.
     
     Args:
         sensor_data: Current sensor readings
     """
-    st.subheader("📡 Current Telemetry Snapshot")
-    
-    # Create two rows of metrics
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            "🌡️ Air Temp [K]",
-            f"{sensor_data['Air temperature [K]']:.1f}",
-            delta=f"{sensor_data['Air temperature [K]'] - 300:.1f}°"
-        )
-    
-    with col2:
-        st.metric(
-            "🔥 Process Temp [K]",
-            f"{sensor_data['Process temperature [K]']:.1f}",
-            delta=f"{sensor_data['Process temperature [K]'] - 310:.1f}°"
-        )
-    
-    with col3:
-        st.metric(
-            "⚡ Rotational Speed",
-            f"{sensor_data['Rotational speed [rpm]']:,.0f} rpm"
-        )
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            "🔧 Torque",
-            f"{sensor_data['Torque [Nm]']:.1f} Nm"
-        )
-    
-    with col2:
-        st.metric(
-            "⏱️ Tool Wear",
-            f"{sensor_data['Tool wear [min]']:.0f} min"
-        )
-    
-    with col3:
-        # Engineered feature: Temp Diff
-        temp_diff = sensor_data['Process temperature [K]'] - sensor_data['Air temperature [K]']
-        st.metric(
-            "📊 Temp Diff [K]",
-            f"{temp_diff:.1f}",
-            delta="Engineered Feature"
-        )
+    st.subheader("📡 Current Machine Health Snapshot")
+
+    metric_items = [
+        ("🌡️", "Air Temp [K]", f"{sensor_data['Air temperature [K]']:.1f} K", f"vs. baseline {sensor_data['Air temperature [K]'] - 300:+.1f} K"),
+        ("🔥", "Process Temp [K]", f"{sensor_data['Process temperature [K]']:.1f} K", f"vs. baseline {sensor_data['Process temperature [K]'] - 310:+.1f} K"),
+        ("⚡", "Rotational Speed", f"{sensor_data['Rotational speed [rpm]']:,.0f} rpm", "Load profile"),
+        ("🔧", "Torque", f"{sensor_data['Torque [Nm]']:.1f} Nm", "Mechanical force"),
+        ("⏱️", "Tool Wear", f"{sensor_data['Tool wear [min]']:.0f} min", "Accumulated wear"),
+    ]
+
+    temp_diff = sensor_data['Process temperature [K]'] - sensor_data['Air temperature [K]']
+    metric_items.append(("📊", "Heat Dissipation Proxy [K]", f"{temp_diff:.1f} K", "Engineered feature"))
+
+    for row in range(2):
+        cols = st.columns(3)
+        for col_idx in range(3):
+            item_idx = row * 3 + col_idx
+            if item_idx < len(metric_items):
+                icon, title, value, detail = metric_items[item_idx]
+                with cols[col_idx]:
+                    render_metric_card(icon, title, value, detail)
 
 
 def render_interactive_scatter_plot(sensor_data: Dict[str, float]):
@@ -503,7 +516,7 @@ def render_interactive_scatter_plot(sensor_data: Dict[str, float]):
     
     # Update layout
     fig.update_layout(
-        title='Machine Operation in Rotational Speed vs Torque Space',
+        title='Machine Operating Regime in Speed-Torque Space',
         xaxis_title='Rotational Speed [rpm]',
         yaxis_title='Torque [Nm]',
         hovermode='closest',
@@ -516,6 +529,49 @@ def render_interactive_scatter_plot(sensor_data: Dict[str, float]):
     )
     
     st.plotly_chart(fig, use_container_width=True)
+
+
+def render_cluster_guidance_tab():
+    """Render an information tab explaining the clusters and maintenance actions."""
+    st.subheader("🧠 How to Read the Clusters")
+    st.markdown("""
+    The app groups machine behavior into operating regimes using telemetry patterns.
+    These regimes help maintenance teams interpret the current machine condition without waiting for a failure.
+    """)
+
+    st.markdown("### Cluster meanings")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.success("✅ Stable Operating Regime")
+        st.write("The machine is behaving normally. Temperatures, load, and wear are within expected ranges.")
+        st.caption("Action: Continue routine monitoring and keep the standard maintenance plan.")
+
+    with col2:
+        st.warning("⚠️ Elevated Wear Risk")
+        st.write("The machine is showing signs of stress or increasing wear, often reflected in higher load or heat buildup.")
+        st.caption("Action: Review the tool and operating conditions, and plan a targeted inspection.")
+
+    with col3:
+        st.error("🚨 Anomaly Detected - Immediate Review")
+        st.write("The machine is operating in an unusual or extreme state that may indicate an emerging issue.")
+        st.caption("Action: Escalate quickly for investigation, inspection, or intervention.")
+
+    st.markdown("### Why the data matters")
+    st.markdown("""
+    - Temperature gap helps signal heat buildup or cooling inefficiency.
+    - Rotational speed and torque together describe the machine's workload.
+    - Tool wear reveals how much mechanical degradation has accumulated.
+    - The plot shows where the current operating point sits compared with historical patterns.
+    """)
+
+    st.markdown("### Practical business value")
+    st.markdown("""
+    This application supports proactive maintenance by helping teams answer three questions:
+    1. Is the machine operating normally?
+    2. Is it entering a higher-risk wear state?
+    3. Should maintenance action be scheduled now or escalated urgently?
+    """)
 
 
 def generate_live_sensor_reading() -> Dict[str, float]:
@@ -578,9 +634,28 @@ def main():
     # Application title and description
     st.title("⚙️ Predictive Maintenance Clustering Dashboard")
     st.markdown("""
-    Real-time machine telemetry simulator with unsupervised clustering for predictive maintenance.
-    Monitor machine state, predict failure modes, and enable proactive maintenance interventions.
+    Monitor machine telemetry to identify abnormal operating regimes, flag elevated wear risk,
+    and support proactive maintenance decisions before failures escalate.
     """)
+
+    header_col, controls_col = st.columns([3.5, 2.0])
+    with header_col:
+        st.caption("Use the controls to deploy the current telemetry profile and monitor the machine state.")
+
+    with controls_col:
+        enable_stream = st.checkbox(
+            "Enable Live Sensor Stream",
+            value=False,
+            key="enable_live_stream_header",
+            help="Automatically generate fluctuating sensor readings every second"
+        )
+        stream_speed = st.select_slider(
+            "Stream Speed",
+            options=[0.5, 1.0, 2.0, 5.0],
+            value=1.0,
+            key="stream_speed_header",
+            help="Interval between sensor updates (seconds)"
+        ) if enable_stream else 1.0
     
     # ========================================================================
     # MODEL LOADING
@@ -604,97 +679,86 @@ def main():
     # Get manual telemetry input from sidebar
     sensor_data = render_sidebar_telemetry_controls()
     
-    # Live streaming toggle
-    st.sidebar.markdown("---")
-    st.sidebar.header("🔄 Live Sensor Stream")
-    enable_stream = st.sidebar.checkbox(
-        "Enable Live Sensor Stream",
-        value=False,
-        help="Automatically generate fluctuating sensor readings every second"
-    )
-    
-    stream_speed = st.sidebar.select_slider(
-        "Stream Speed",
-        options=[0.5, 1.0, 2.0, 5.0],
-        value=1.0,
-        help="Interval between sensor updates (seconds)"
-    ) if enable_stream else 1.0
-    
     # ========================================================================
     # MAIN DASHBOARD
     # ========================================================================
-    
-    # Placeholder for dynamic updates
-    status_placeholder = st.empty()
-    metrics_placeholder = st.empty()
-    plot_placeholder = st.empty()
-    
-    # Start the stream loop if enabled
-    if enable_stream:
-        st.info("📡 Live streaming enabled - sensor readings update every {:.1f}s".format(stream_speed))
-        stream_container = st.empty()
-        stream_log = st.empty()
-        log_messages = []
-        
-        # Streaming loop
-        while enable_stream:
-            try:
-                # Generate new sensor reading
-                sensor_data = generate_live_sensor_reading()
-                
-                # Make prediction
-                cluster_id, risk_label, risk_color = predict_cluster(
-                    sensor_data, pipeline, kmeans_model
-                )
-                
-                # Update UI components
-                with status_placeholder.container():
-                    render_operational_status(cluster_id, risk_label, risk_color)
-                
-                with metrics_placeholder.container():
-                    render_telemetry_metrics(sensor_data)
-                
-                with plot_placeholder.container():
-                    render_interactive_scatter_plot(sensor_data)
-                
-                # Log stream event
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                log_msg = f"[{timestamp}] Cluster {cluster_id} | {risk_label}"
-                log_messages.append(log_msg)
-                log_messages = log_messages[-10:]  # Keep last 10 messages
-                
-                with stream_log.container():
-                    st.caption("📝 Stream Log (Last 10 Events):")
-                    for msg in log_messages:
-                        st.caption(msg)
-                
-                # Wait before next update
-                time.sleep(stream_speed)
-            
-            except Exception as e:
-                st.error(f"Streaming error: {e}")
-                logger.exception("Error during live streaming")
-                break
-    
-    else:
-        # Standard mode: display user-controlled data
-        
-        # Predict cluster for current sensor data
-        cluster_id, risk_label, risk_color = predict_cluster(
-            sensor_data, pipeline, kmeans_model
-        )
-        
-        # Render operational status card
-        with status_placeholder.container():
-            render_operational_status(cluster_id, risk_label, risk_color)
-        
-        # Render telemetry metrics
-        with metrics_placeholder.container():
-            render_telemetry_metrics(sensor_data)
-        
-        # Render interactive scatter plot
-        with plot_placeholder.container():
-            render_interactive_scatter_plot(sensor_data)
+
+    tab_dashboard, tab_guidance = st.tabs(["📊 Dashboard", "🧭 How to Interpret Results"])
+
+    with tab_dashboard:
+        # Placeholder for dynamic updates
+        status_placeholder = st.empty()
+        metrics_placeholder = st.empty()
+        plot_placeholder = st.empty()
+
+        # Start the stream loop if enabled
+        if enable_stream:
+            st.info("📡 Live streaming enabled - sensor readings update every {:.1f}s".format(stream_speed))
+            stream_container = st.empty()
+            stream_log = st.empty()
+            log_messages = []
+
+            # Streaming loop
+            while enable_stream:
+                try:
+                    # Generate new sensor reading
+                    sensor_data = generate_live_sensor_reading()
+
+                    # Make prediction
+                    cluster_id, risk_label, risk_color = predict_cluster(
+                        sensor_data, pipeline, kmeans_model
+                    )
+
+                    # Update UI components
+                    with status_placeholder.container():
+                        render_operational_status(cluster_id, risk_label, risk_color)
+
+                    with metrics_placeholder.container():
+                        render_telemetry_metrics(sensor_data)
+
+                    with plot_placeholder.container():
+                        render_interactive_scatter_plot(sensor_data)
+
+                    # Log stream event
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    log_msg = f"[{timestamp}] Cluster {cluster_id} | {risk_label}"
+                    log_messages.append(log_msg)
+                    log_messages = log_messages[-10:]  # Keep last 10 messages
+
+                    with stream_log.container():
+                        st.caption("📝 Stream Log (Last 10 Events):")
+                        for msg in log_messages:
+                            st.caption(msg)
+
+                    # Wait before next update
+                    time.sleep(stream_speed)
+
+                except Exception as e:
+                    st.error(f"Streaming error: {e}")
+                    logger.exception("Error during live streaming")
+                    break
+
+        else:
+            # Standard mode: display user-controlled data
+
+            # Predict cluster for current sensor data
+            cluster_id, risk_label, risk_color = predict_cluster(
+                sensor_data, pipeline, kmeans_model
+            )
+
+            # Render operational status card
+            with status_placeholder.container():
+                render_operational_status(cluster_id, risk_label, risk_color)
+
+            with metrics_placeholder.container():
+                render_telemetry_metrics(sensor_data)
+
+            # Render interactive scatter plot
+            with plot_placeholder.container():
+                render_interactive_scatter_plot(sensor_data)
+
+    with tab_guidance:
+        render_cluster_guidance_tab()
     
     # ========================================================================
     # FOOTER
