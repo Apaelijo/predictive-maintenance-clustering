@@ -8,6 +8,14 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 
+NUMERIC_FEATURES = [
+    'Air temperature [K]', 'Process temperature [K]',
+    'Rotational speed [rpm]', 'Torque [Nm]', 'Tool wear [min]'
+]
+CATEGORICAL_FEATURES = ['Type']
+SELECTED_FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+
+
 def get_project_root() -> Path:
     """
     Returns the project root directory regardless of where the code is executed.
@@ -37,16 +45,15 @@ def load_and_clean_data(filepath: str = "data/raw/ai4i2020.csv") -> pd.DataFrame
     return data, labels
 
 
+def get_selected_features() -> list[str]:
+    """Return the feature subset used throughout the project workflow."""
+    return SELECTED_FEATURES.copy()
+
+
 def build_preprocessing_pipeline():
-    numeric_features = [
-        'Air temperature [K]', 'Process temperature [K]', 
-        'Rotational speed [rpm]', 'Torque [Nm]', 'Tool wear [min]'
-    ]
-    categorical_features = ['Type']
-    
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', StandardScaler(), numeric_features),
-            ('cat', OneHotEncoder(drop='first', sparse_output=False), categorical_features)
+            ('num', StandardScaler(), NUMERIC_FEATURES),
+            ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES)
         ])
     return preprocessor
