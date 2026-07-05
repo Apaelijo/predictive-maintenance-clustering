@@ -62,9 +62,10 @@ Dynamically calculated from user inputs
 4. Operational Status Display
 ✅ Prominent cluster prediction card
 ✅ Risk mapping system:
-🟢 Normal Operation (Cluster 0) - Green/Success
-🟠 High-Stress State (Cluster 1) - Orange/Warning
-🔴 Immediate Anomaly Warning (Cluster 2) - Red/Error
+🟢 Stable Operators (Cluster 0) - Green/Success
+ℹ️ Efficient but Young Machines (Cluster 1) - Blue/Info
+🟠 High-Load Machines (Cluster 2) - Orange/Warning
+🔴 Aging or At-Risk Machines (Cluster 3) - Red/Error
 5. Interactive Plotly Visualizations
 ✅ 2D scatter plot: Rotational Speed vs Torque
 ✅ Historical background points (lightly colored)

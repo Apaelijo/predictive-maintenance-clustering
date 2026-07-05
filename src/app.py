@@ -52,15 +52,14 @@ TYPE_OPTIONS = ['L', 'M', 'H']
 
 # Risk mapping: cluster_id -> (status_label, color, severity)
 RISK_MAPPING = {
-    0: ("Stable Operating Regime", "success", 0),
-    1: ("Elevated Wear Risk", "warning", 1),
-    2: ("Anomaly Detected - Immediate Review", "error", 2),
+    0: ("Stable Operators", "success", 0),
+    1: ("Efficient but Young Machines", "info", 0),
+    2: ("High-Load Machines", "warning", 1),
+    3: ("Aging or At-Risk Machines", "error", 2),
 }
 
-# If the trained model uses more than three clusters, you can extend this mapping
-# or rely on the dynamic fallback in `predict_cluster` below which will produce
-# a sensible informational label for any unmapped cluster id.
-RISK_MAPPING[3] = ("High-Risk Operating Regime", "warning", 1)
+# Extend this mapping if the model is retrained with extra clusters.
+# Cluster IDs beyond the known set will still fall back to a generic label.
 # ============================================================================
 # MODEL LOADING & CACHING
 # ============================================================================
@@ -396,28 +395,49 @@ def render_operational_status(cluster_id: int, risk_label: str, risk_color: str)
         risk_label: Human-readable risk status
         risk_color: Color coding for status (success, warning, error)
     """
-    col1, col2, col3 = st.columns([1, 2, 1])
-    
-    with col2:
+    # Render status area full-width so it uses the entire app pane
+    with st.container():
         st.markdown("---")
-        st.metric(
-            label="🎯 Detected Operating Regime",
-            value=f"Regime {cluster_id}",
-            delta=risk_label if risk_label != "Prediction Error" else None,
-            delta_color="normal"
+
+        # Primary title showing full cluster label (use neutral wording)
+        st.markdown(f"## 🎯 Detected Operating Condition\n\n**Cluster {cluster_id}: {risk_label}**")
+
+        # Colored badge (pill) matching the risk_color semantics
+        emoji_map = {
+            "success": "✅",
+            "info": "ℹ️",
+            "warning": "⚠️",
+            "error": "🚨",
+        }
+
+        color_map = {
+            "success": ("#dcfce7", "#065f46"),
+            "info": ("#dbeafe", "#1e3a8a"),
+            "warning": ("#fffbeb", "#92400e"),
+            "error": ("#fee2e2", "#7f1d1d"),
+        }
+
+        bg, fg = color_map.get(risk_color, ("#f3f4f6", "#374151"))
+        emoji = emoji_map.get(risk_color, "ℹ️")
+
+        badge_html = (
+            f"<div style=\"display:inline-block; padding:10px 18px; border-radius:10px;"
+            f" background:{bg}; color:{fg}; font-weight:600; margin-top:12px;\">{emoji} {risk_label}</div>"
         )
 
+        # Use full-width markdown so the badge and caption span the pane
+        st.markdown(badge_html, unsafe_allow_html=True)
+
+        # Concise maintenance guidance (single-line caption under the badge)
         if risk_color == "success":
-            st.success(f"✅ {risk_label}")
             st.caption("Maintenance action: Continue routine monitoring and schedule standard inspections.")
+        elif risk_color == "info":
+            st.caption("Maintenance action: Monitor performance; no immediate action needed.")
         elif risk_color == "warning":
-            st.warning(f"⚠️ {risk_label}")
-            st.caption("Maintenance action: Review wear indicators and plan a targeted inspection.")
+            st.caption("Maintenance action: Schedule preventive checks; risk of wear or overheating.")
         elif risk_color == "error":
-            st.error(f"🚨 {risk_label}")
-            st.caption("Maintenance action: Escalate for immediate investigation and intervention.")
+            st.caption("Maintenance action: Prioritize inspection; possible early intervention needed.")
         else:
-            st.info(f"ℹ️ {risk_label}")
             st.caption("Maintenance action: Validate the input and reassess the operating state.")
 
         st.markdown("---")
@@ -540,22 +560,27 @@ def render_cluster_guidance_tab():
     """)
 
     st.markdown("### Cluster meanings")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.success("✅ Stable Operating Regime")
-        st.write("The machine is behaving normally. Temperatures, load, and wear are within expected ranges.")
+        st.success("✅ Cluster 0 - Stable Operators")
+        st.write("Machines running smoothly under normal load with balanced temperatures and average tool wear.")
         st.caption("Action: Continue routine monitoring and keep the standard maintenance plan.")
 
     with col2:
-        st.warning("⚠️ Elevated Wear Risk")
-        st.write("The machine is showing signs of stress or increasing wear, often reflected in higher load or heat buildup.")
-        st.caption("Action: Review the tool and operating conditions, and plan a targeted inspection.")
+        st.info("ℹ️ Cluster 1 - Efficient but Young Machines")
+        st.write("Newer machines or recently serviced units with low wear, moderate speed, and slightly lower torque.")
+        st.caption("Action: Monitor performance; no immediate action needed.")
 
     with col3:
-        st.error("🚨 Anomaly Detected - Immediate Review")
-        st.write("The machine is operating in an unusual or extreme state that may indicate an emerging issue.")
-        st.caption("Action: Escalate quickly for investigation, inspection, or intervention.")
+        st.warning("⚠️ Cluster 2 - High-Load Machines")
+        st.write("Machines working hard or under stress with high torque, high speed, and elevated temperature.")
+        st.caption("Action: Schedule preventive checks; risk of wear or overheating.")
+
+    with col4:
+        st.error("🚨 Cluster 3 - Aging or At-Risk Machines")
+        st.write("Machines showing signs of fatigue or nearing failure with high tool wear and rising temperature.")
+        st.caption("Action: Prioritize inspection; possible early intervention needed.")
 
     st.markdown("### Why the data matters")
     st.markdown("""
@@ -769,6 +794,7 @@ def main():
     <div style='text-align: center; color: #888; font-size: 0.9em;'>
     <p>🔬 Predictive Maintenance Clustering System | AI4I 2020 Dataset | K-Means Clustering</p>
     <p><em>Real-time machine monitoring for proactive maintenance interventions</em></p>
+    <p><em>Christopher Lopez - AIM PGD AI and ML June 2025 - July 2026</em></p>
     </div>
     """, unsafe_allow_html=True)
 
