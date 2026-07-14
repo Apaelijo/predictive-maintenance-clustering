@@ -33,7 +33,7 @@ def load_and_clean_data(filepath: str = "data/raw/ai4i2020.csv") -> pd.DataFrame
     df = pd.read_csv(full_path)
     logging.info(f"Loaded dataset with shape: {df.shape}")
     
-    # Drop IDs
+    # Drop IDs - we do not need them for our clustering
     df = df.drop(['UDI', 'Product ID'], axis=1)
     
     # Separate labels for later validation

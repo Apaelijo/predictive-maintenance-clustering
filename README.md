@@ -1,92 +1,48 @@
-# Predictive Maintenance Clustering
+# Predictive Maintenance Clustering System (DBSCAN + SHAP)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Placeholder-lightgrey.svg)](#license)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-App-red.svg)](https://streamlit.io/)
 
-An open-source data science project focused on identifying and classifying distinct machine failure modes using unsupervised machine learning. By clustering operational telemetric data, this pipeline helps maintenance teams transition from reactive fixes to targeted, proactive root-cause interventions.
+## Overview
 
----
+The Predictive Maintenance Clustering System is a machine telemetry dashboard for identifying operating regimes, monitoring current machine state, and supporting proactive maintenance decisions. The application uses DBSCAN clustering to group historical machine behavior into meaningful regimes such as abnormal load, variable operation, and stable running.
 
-## 📌 Business Case & Overview
-In modern manufacturing, unexpected equipment downtime is incredibly costly. While traditional predictive maintenance focuses on binary classification (will it fail or not?), this project leverages **unsupervised clustering** to uncover the *hidden signatures* of different root-cause failure modes (e.g., Tool Wear, Heat Dissipation, Power Failure, and Overstrain). 
+The project also includes SHAP explainability to help interpret which input signals contribute most strongly to the model’s behavior and maintenance interpretation. In the dashboard, operators can monitor the current machine state in real time while comparing it against historical speed-torque patterns and cluster assignments.
 
-By automatically segmenting these anomalies, operations teams can deploy specific engineering fixes rather than wasting time diagnosing the issue from scratch.
+## Repository Structure
 
-## 📊 Dataset
-This project utilizes the **AI4I 2020 Predictive Maintenance Dataset**, a synthetic dataset reflecting real-world industrial milling machine operations. 
-* **Features used:** Air temperature, process temperature, rotational speed, torque, and tool wear.
-
----
-
-## 📂 Project Structure
-
-
+```text
 predictive-maintenance-clustering/
 ├── data/
-│   ├── raw/            # Immutable, original data source (e.g., ai4i2020.csv)
-│   └── processed/      # Cleaned, transformed, and scaled data for modeling
+│   ├── raw/
+│   │   └── ai4i2020.csv
+│   └── processed/
+│       └── cluster_assignments.csv
+├── models/
+│   ├── champion_dbscan.pkl
+│   └── preprocessing_pipeline.pkl
 ├── notebooks/
-│   └── 01_eda_preprocessing.ipynb  # Interactive data exploration & visualization
-├── src/                # Production-ready, modular Python code
+│   ├── 01_eda_preprocessing.ipynb
+│   ├── 02_clustering.ipynb
+│   ├── 03_evaluation.ipynb
+│   └── Christopher_Lopez_Capstone_Technical_Presentation.ipynb
+├── presentation/
+│   ├── images/
+│   ├── Christopher_Lopez_Capstone_Business_Facing_Presentation.pptx
+│   └── Christopher_Lopez_Capstone_Technical_Document.docx
+├── src/
 │   ├── __init__.py
+│   ├── app.py
 │   ├── data/
-│   │   └── preprocess.py          # Data ingestion and cleaning pipelines
+│   │   └── preprocess.py
 │   ├── features/
-│   │   └── build_features.py      # Feature scaling and engineering scripts
+│   │   └── build_features.py
+│   ├── models/
+│   │   ├── cluster.py
+│   │   └── train.py
 │   └── utils/
-│       └── viz.py                 # Reusable plotting functions for clustering
-├── models/             # Saved model weights/artifacts (e.g., GMM pickle files)
-├── requirements.txt    # Project dependencies
-├── README.md           # Project documentation
-└── .gitignore          # Files protected from git tracking
-
-
-About the Sample Application
-
-Core Features Delivered ✅
-1. Pipeline & Model Loading
-✅ Cached loading of preprocessing_pipeline.pkl and champion_kmeans.pkl using @st.cache_resource
-✅ Graceful fallback to mock models if files aren't found yet
-✅ Comprehensive error handling with logging
-2. Interactive UI Sidebar
-✅ Type dropdown (L, M, H options)
-✅ Air Temperature slider (295-305K)
-✅ Process Temperature slider (304-315K)
-✅ Rotational Speed slider (1100-2900 rpm)
-✅ Torque slider (3.0-75.0 Nm)
-✅ Tool Wear slider (0-250 min)
-3. Feature Engineering Engine
-✅ Temp_Diff = Process Temperature - Air Temperature
-✅ Power_Proxy = Torque × Rotational Speed
-Dynamically calculated from user inputs
-4. Operational Status Display
-✅ Prominent cluster prediction card
-✅ Risk mapping system:
-🟢 Stable Operators (Cluster 0) - Green/Success
-ℹ️ Efficient but Young Machines (Cluster 1) - Blue/Info
-🟠 High-Load Machines (Cluster 2) - Orange/Warning
-🔴 Aging or At-Risk Machines (Cluster 3) - Red/Error
-5. Interactive Plotly Visualizations
-✅ 2D scatter plot: Rotational Speed vs Torque
-✅ Historical background points (lightly colored)
-✅ Large, prominent red star marker for current machine state
-✅ Interactive hover information
-6. Automated Streamer Mode
-✅ Sidebar toggle: "Enable Live Sensor Stream"
-✅ Adjustable stream speed (0.5, 1.0, 2.0, 5.0 seconds)
-✅ Realistic fluctuating sensor readings
-✅ Live event logging (last 10 updates)
-✅ Real-time dashboard updates
-7. Additional Features
-✅ Clean, production-ready code with extensive comments
-✅ Modern Streamlit layout with st.columns() and st.metric()
-✅ Comprehensive error handling throughout
-✅ Professional styling and responsive design
-✅ Emoji-enhanced UI for better readability
-✅ Full logging configuration
-Key Implementation Details
-Caching Strategy: Models loaded once and reused across sessions for optimal performance
-Fallback Mechanism: Application works even if .pkl files haven't been created yet
-Session State Management: Maintains last sensor reading for realistic fluctuations during streaming
-Feature-Complete: All engineered features calculated on-the-fly from raw inputs
-Real Dataset Alignment: Uses exact feature names and ranges from AI4I 2020 dataset
+│       └── viz.py
+├── requirements.txt
+├── README.md
+└── LICENSE

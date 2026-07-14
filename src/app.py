@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Tuple, Dict, Optional
 import plotly.graph_objects as go
 import plotly.express as px
+from sklearn.cluster import DBSCAN
 from datetime import datetime
 import logging
 
@@ -36,8 +37,8 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Model paths
-SCALER_PATH = PROJECT_ROOT / "notebooks" / "models" / "preprocessing_pipeline.pkl"
-KMEANS_PATH = PROJECT_ROOT / "notebooks" / "models" / "champion_kmeans.pkl"
+SCALER_PATH = PROJECT_ROOT / "models" / "preprocessing_pipeline.pkl"
+CLUSTER_MODEL_PATH = PROJECT_ROOT / "models" / "champion_dbscan.pkl"
 
 # AI4I 2020 Dataset feature ranges (for realistic data generation)
 TELEMETRY_RANGES = {
@@ -52,14 +53,18 @@ TYPE_OPTIONS = ['L', 'M', 'H']
 
 # Risk mapping: cluster_id -> (status_label, color, severity)
 RISK_MAPPING = {
-    0: ("Stable Operators", "success", 0),
-    1: ("Efficient but Young Machines", "info", 0),
-    2: ("High-Load Machines", "warning", 1),
-    3: ("Aging or At-Risk Machines", "error", 2),
+    -1: ("Abnormal Load", "warning", 2),
+    0: ("Variable Operation", "success", 0),
+    1: ("Stable Running", "info", 0),
 }
 
 # Extend this mapping if the model is retrained with extra clusters.
 # Cluster IDs beyond the known set will still fall back to a generic label.
+CLUSTER_VISUALS = {
+    -1: {"name": "Abnormal Load", "color": "#E74C3C"},
+    0: {"name": "Variable Operation", "color": "#F39C12"},
+    1: {"name": "Stable Running", "color": "#3498DB"},
+}
 # ============================================================================
 # MODEL LOADING & CACHING
 # ============================================================================
@@ -90,28 +95,27 @@ def load_preprocessing_pipeline():
 
 
 @st.cache_resource
-def load_kmeans_model():
+def load_cluster_model():
     """
-    Load the trained K-Means clustering model with caching.
+    Load the trained clustering model with caching.
     
     Returns:
-        Loaded K-Means model or None if not found.
-        Also returns fallback random predictor if files unavailable.
+        Loaded clustering model or fallback mock model if not found.
     """
     try:
-        if not KMEANS_PATH.exists():
-            logger.warning(f"K-Means model not found at {KMEANS_PATH}")
+        if not CLUSTER_MODEL_PATH.exists():
+            logger.warning(f"Clustering model not found at {CLUSTER_MODEL_PATH}")
             logger.info("Using fallback mock model...")
-            return _create_fallback_kmeans()
+            return _create_fallback_cluster_model()
         
-        model = joblib.load(KMEANS_PATH)
-        logger.info("✓ K-Means model loaded successfully")
+        model = joblib.load(CLUSTER_MODEL_PATH)
+        logger.info("✓ Clustering model loaded successfully")
         return model
     
     except Exception as e:
-        logger.error(f"Error loading K-Means model: {e}")
+        logger.error(f"Error loading clustering model: {e}")
         logger.info("Falling back to mock model...")
-        return _create_fallback_kmeans()
+        return _create_fallback_cluster_model()
 
 
 def _create_fallback_pipeline():
@@ -140,25 +144,28 @@ def _create_fallback_pipeline():
     return preprocessor
 
 
-def _create_fallback_kmeans():
+def _create_fallback_cluster_model():
     """
-    Create a minimal fallback K-Means model for demo purposes.
+    Create a minimal fallback clustering model for demo purposes.
     
     Returns:
-        Mock K-Means object that returns random cluster assignments.
+        Mock clustering object that returns random cluster assignments.
     """
-    class MockKMeans:
-        """Mock K-Means model for fallback when actual model is unavailable."""
+    class MockClusterModel:
+        """Mock clustering model for fallback when actual model is unavailable."""
         def __init__(self):
             self.n_clusters = 3
-            self.cluster_centers_ = np.random.randn(3, 6)
         
         def predict(self, X):
             """Return random cluster assignment (0, 1, or 2)."""
             return np.random.randint(0, self.n_clusters, size=len(X))
+
+        def fit_predict(self, X):
+            """Return random cluster assignment (0, 1, or 2) for compatibility with DBSCAN-like models."""
+            return self.predict(X)
     
-    logger.info("Fallback K-Means model created")
-    return MockKMeans()
+    logger.info("Fallback clustering model created")
+    return MockClusterModel()
 
 
 # ============================================================================
@@ -222,22 +229,101 @@ def prepare_prediction_input(sensor_data: Dict[str, float]) -> pd.DataFrame:
 # PREDICTION & RISK ASSESSMENT
 # ============================================================================
 
+def _is_dbscan_model(model) -> bool:
+    """Detect whether the loaded model is a trained DBSCAN clustering object."""
+    return (
+        hasattr(model, 'components_') and
+        hasattr(model, 'core_sample_indices_') and
+        hasattr(model, 'labels_') and
+        hasattr(model, 'eps')
+    )
+
+
+def _dbscan_predict(model, X, return_debug: bool = False):
+    """Assign cluster labels to new points using a fitted DBSCAN model.
+
+    Strategy:
+    1) If a point has core neighbors within eps, assign by local majority vote.
+    2) If not, use nearest-core fallback only when reasonably close to eps.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    if not _is_dbscan_model(model):
+        raise AttributeError("DBSCAN model missing required trained attributes")
+
+    core_samples = model.components_
+    core_labels = model.labels_[model.core_sample_indices_]
+    if core_samples.size == 0:
+        preds = np.full(len(X), -1, dtype=int)
+        if return_debug:
+            return preds, [{'reason': 'no_core_samples'} for _ in range(len(X))]
+        return preds
+
+    nn_radius = NearestNeighbors(radius=model.eps).fit(core_samples)
+    distances, neighbors = nn_radius.radius_neighbors(X)
+    k = min(5, len(core_samples))
+    nn_knn = NearestNeighbors(n_neighbors=k).fit(core_samples)
+
+    fallback_multiplier = 1.35
+    preds = []
+    debug_rows = []
+    for dist_list, neighbor_idx in zip(distances, neighbors):
+        if len(neighbor_idx) == 0:
+            nearest_dist, nearest_idx = nn_knn.kneighbors([X[len(preds)]], n_neighbors=1)
+            nearest_distance = float(nearest_dist[0][0])
+            nearest_label = int(core_labels[nearest_idx[0][0]])
+
+            if nearest_distance <= float(model.eps) * fallback_multiplier:
+                preds.append(nearest_label)
+                debug_rows.append({
+                    'assigned_by': 'nearest_core_fallback',
+                    'neighbor_count': 0,
+                    'nearest_distance': nearest_distance,
+                })
+            else:
+                preds.append(-1)
+                debug_rows.append({
+                    'assigned_by': 'noise',
+                    'neighbor_count': 0,
+                    'nearest_distance': nearest_distance,
+                })
+        else:
+            local_labels = core_labels[neighbor_idx]
+            unique_labels, counts = np.unique(local_labels, return_counts=True)
+            voted_label = int(unique_labels[np.argmax(counts)])
+            preds.append(voted_label)
+            debug_rows.append({
+                'assigned_by': 'radius_majority_vote',
+                'neighbor_count': int(len(neighbor_idx)),
+                'nearest_distance': float(np.min(dist_list)),
+            })
+
+    preds = np.array(preds, dtype=int)
+    if return_debug:
+        return preds, debug_rows
+    return preds
+
+
 def predict_cluster(
     sensor_data: Dict[str, float],
     pipeline,
-    model
-) -> Tuple[int, str, str]:
+    model,
+    debug: bool = False
+):
     """
     Predict cluster assignment and map to risk status.
     
     Args:
         sensor_data: Raw telemetry readings
         pipeline: Preprocessing pipeline
-        model: Trained K-Means model
+        model: Trained clustering model
+        debug: Whether to include prediction debug details
         
     Returns:
-        Tuple of (cluster_id, risk_label, risk_color)
+        Tuple of (cluster_id, risk_label, risk_color) or
+        (cluster_id, risk_label, risk_color, debug_info) when debug=True
     """
+    debug_info = {}
     try:
         # Prepare input data
         df = prepare_prediction_input(sensor_data)
@@ -249,9 +335,28 @@ def predict_cluster(
         except Exception:
             X_processed = pipeline.fit_transform(df)
 
-        # Ensure we pass the correctly shaped array to the model
-        preds = model.predict(X_processed)
+        debug_info['input_shape'] = X_processed.shape
+        debug_info['input_values'] = X_processed.tolist()
+
+        # Use DBSCAN assignment if the loaded model appears to be a fitted DBSCAN.
+        if _is_dbscan_model(model):
+            if debug:
+                preds, dbscan_debug = _dbscan_predict(model, X_processed, return_debug=True)
+                debug_info['dbscan_details'] = dbscan_debug
+            else:
+                preds = _dbscan_predict(model, X_processed)
+            debug_info['prediction_method'] = 'dbscan_radius_assignment'
+        elif hasattr(model, 'predict'):
+            preds = model.predict(X_processed)
+            debug_info['prediction_method'] = 'predict'
+        elif hasattr(model, 'fit_predict'):
+            preds = model.fit_predict(X_processed)
+            debug_info['prediction_method'] = 'fit_predict'
+        else:
+            raise AttributeError("Loaded model has neither predict nor fit_predict")
+
         cluster_id = int(preds[0]) if len(preds) > 0 else -1
+        debug_info['cluster_id'] = cluster_id
 
         # Map to risk status
         risk_label, risk_color, _ = RISK_MAPPING.get(
@@ -259,10 +364,15 @@ def predict_cluster(
             ("Unknown Cluster", "secondary", -1)
         )
 
+        if debug:
+            return cluster_id, risk_label, risk_color, debug_info
         return cluster_id, risk_label, risk_color
 
     except Exception as e:
         logger.error(f"Prediction error: {e}")
+        debug_info['error'] = str(e)
+        if debug:
+            return -1, "Prediction Error", "secondary", debug_info
         return -1, "Prediction Error", "secondary"
 
 
@@ -473,79 +583,135 @@ def render_telemetry_metrics(sensor_data: Dict[str, float]):
                     render_metric_card(icon, title, value, detail)
 
 
-def render_interactive_scatter_plot(sensor_data: Dict[str, float]):
+@st.cache_data(show_spinner=False)
+def load_historical_speed_torque_data() -> pd.DataFrame:
+    """Load historical speed-torque data used for the cluster visualization."""
+    raw_data_path = PROJECT_ROOT / "data" / "raw" / "ai4i2020.csv"
+    df = pd.read_csv(raw_data_path)
+
+    df = df.drop(columns=["UDI", "Product ID"], errors="ignore")
+    df = df.drop(columns=["Machine failure", "TWF", "HDF", "PWF", "OSF", "RNF"], errors="ignore")
+
+    return df[["Rotational speed [rpm]", "Torque [Nm]"]].copy()
+
+
+def _resolve_historical_dbscan_labels(cluster_model, n_rows: int) -> np.ndarray:
+    """Resolve historical DBSCAN labels from the fitted model or saved assignments."""
+    if _is_dbscan_model(cluster_model) and len(getattr(cluster_model, "labels_", [])) == n_rows:
+        return np.asarray(cluster_model.labels_)
+
+    assignments_path = PROJECT_ROOT / "data" / "processed" / "cluster_assignments.csv"
+    if assignments_path.exists():
+        assignments_df = pd.read_csv(assignments_path)
+        if "dbscan_cluster" in assignments_df.columns and len(assignments_df) == n_rows:
+            return assignments_df["dbscan_cluster"].to_numpy()
+
+    return np.full(n_rows, -1, dtype=int)
+
+
+def render_interactive_scatter_plot(sensor_data: Dict[str, float], cluster_id: int, cluster_model):
     """
     Create interactive 2D Plotly scatter plot: Rotational Speed vs Torque.
     
-    Current user data point is shown as large, pulsing, highlighted marker.
-    Historical/background points (simulated) are shown lightly.
+    Historical points are colored by DBSCAN cluster label and the current machine state is
+    emphasized with a prominent marker.
     
     Args:
-        sensor_data: Current sensor readings for main data point
+        sensor_data: Current sensor readings for the current machine state
+        cluster_id: Predicted DBSCAN cluster label for the current machine state
+        cluster_model: Loaded DBSCAN model used to color the historical points
     """
-    st.subheader("🎯 Operational Feature Space Analysis")
-    
-    # Generate synthetic historical data points for context
-    np.random.seed(42)
-    n_historical = 150
-    
-    historical_speeds = np.random.uniform(1100, 2900, n_historical)
-    historical_torques = np.random.uniform(3, 75, n_historical)
-    
-    # Create figure with background points
+    st.subheader("🎯 DBSCAN Operating Regimes in Speed-Torque Space")
+
+    historical_df = load_historical_speed_torque_data()
+    historical_labels = _resolve_historical_dbscan_labels(cluster_model, len(historical_df))
+
     fig = go.Figure()
-    
-    # Add historical background points (light color)
-    fig.add_trace(go.Scatter(
-        x=historical_speeds,
-        y=historical_torques,
-        mode='markers',
-        marker=dict(
-            size=6,
-            color='rgba(128, 128, 128, 0.2)',
-            line=dict(width=0)
-        ),
-        name='Historical Data',
-        hovertemplate='<b>Historical Point</b><br>Speed: %{x:.0f} rpm<br>Torque: %{y:.1f} Nm<extra></extra>'
-    ))
-    
-    # Add current data point (large, prominent marker)
+
+    for label in [-1, 0, 1]:
+        label_mask = historical_labels == label
+        if not np.any(label_mask):
+            continue
+
+        visual = CLUSTER_VISUALS[label]
+        fig.add_trace(go.Scatter(
+            x=historical_df.loc[label_mask, "Rotational speed [rpm]"],
+            y=historical_df.loc[label_mask, "Torque [Nm]"],
+            mode="markers",
+            name=visual["name"],
+            legendgroup=str(label),
+            marker=dict(
+                size=7,
+                color=visual["color"],
+                opacity=0.7,
+                line=dict(color="white", width=0.5),
+            ),
+            hovertemplate=(
+                f"<b>{visual['name']}</b><br>"
+                "Speed: %{x:.0f} rpm<br>"
+                "Torque: %{y:.1f} Nm<extra></extra>"
+            ),
+        ))
+
     current_speed = sensor_data['Rotational speed [rpm]']
     current_torque = sensor_data['Torque [Nm]']
+    current_visual = CLUSTER_VISUALS.get(cluster_id, {"name": f"Cluster {cluster_id}", "color": "#6C757D"})
     
     fig.add_trace(go.Scatter(
         x=[current_speed],
         y=[current_torque],
-        mode='markers+text',
+        mode="markers+text",
         marker=dict(
-            size=25,
-            color='#FF6B6B',
-            symbol='star',
-            line=dict(
-                color='darkred',
-                width=3
-            ),
-            opacity=0.9
+            size=22,
+            color=current_visual["color"],
+            symbol="star",
+            line=dict(color="black", width=2.5),
+            opacity=1.0,
         ),
-        text=['CURRENT'],
-        textposition='top center',
-        textfont=dict(size=12, color='darkred'),
-        name='Current Machine State',
-        hovertemplate='<b>🚀 CURRENT STATE</b><br>Speed: %{x:.0f} rpm<br>Torque: %{y:.1f} Nm<extra></extra>'
+        text=["CURRENT"],
+        textposition="top center",
+        textfont=dict(size=12, color="black"),
+        name="Current Machine State",
+        showlegend=False,
+        hovertemplate=(
+            f"<b>Current Machine State</b><br>Cluster: {current_visual['name']}<br>"
+            "Speed: %{x:.0f} rpm<br>"
+            "Torque: %{y:.1f} Nm<extra></extra>"
+        ),
     ))
     
     # Update layout
     fig.update_layout(
-        title='Machine Operating Regime in Speed-Torque Space',
-        xaxis_title='Rotational Speed [rpm]',
-        yaxis_title='Torque [Nm]',
-        hovermode='closest',
-        plot_bgcolor='rgba(240, 240, 240, 0.5)',
-        paper_bgcolor='white',
+        title="Machine Operating Regimes in Speed-Torque Space",
+        xaxis_title="Rotational Speed [rpm]",
+        yaxis_title="Torque [Nm]",
+        hovermode="closest",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
         width=900,
-        height=500,
+        height=520,
         showlegend=True,
-        legend=dict(x=0.02, y=0.98)
+        legend=dict(
+            x=0.01,
+            y=0.99,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0.08)",
+            borderwidth=1,
+        ),
+        margin=dict(l=30, r=20, t=70, b=30),
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(0, 0, 0, 0.08)",
+        zeroline=False,
+        rangemode="tozero",
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(0, 0, 0, 0.08)",
+        zeroline=False,
+        rangemode="tozero",
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -560,34 +726,29 @@ def render_cluster_guidance_tab():
     """)
 
     st.markdown("### Cluster meanings")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.success("✅ Cluster 0 - Stable Operators")
-        st.write("Machines running smoothly under normal load with balanced temperatures and average tool wear.")
-        st.caption("Action: Continue routine monitoring and keep the standard maintenance plan.")
+        st.warning("⚠️ Cluster -1 - Abnormal Load")
+        st.write("Highest and most variable power proxy, lowest temperature differential, and highest tool wear.")
+        st.caption("State: Signs of failure or worth investigating for maintenance.")
 
     with col2:
-        st.info("ℹ️ Cluster 1 - Efficient but Young Machines")
-        st.write("Newer machines or recently serviced units with low wear, moderate speed, and slightly lower torque.")
-        st.caption("Action: Monitor performance; no immediate action needed.")
+        st.success("✅ Cluster 0 - Variable Operation")
+        st.write("Medium-high power proxy, medium temperature differential, and medium tool wear.")
+        st.caption("State: Represents typical machine behavior; operating normally with some variability.")
 
     with col3:
-        st.warning("⚠️ Cluster 2 - High-Load Machines")
-        st.write("Machines working hard or under stress with high torque, high speed, and elevated temperature.")
-        st.caption("Action: Schedule preventive checks; risk of wear or overheating.")
-
-    with col4:
-        st.error("🚨 Cluster 3 - Aging or At-Risk Machines")
-        st.write("Machines showing signs of fatigue or nearing failure with high tool wear and rising temperature.")
-        st.caption("Action: Prioritize inspection; possible early intervention needed.")
+        st.info("ℹ️ Cluster 1 - Stable Running")
+        st.write("Lowest power proxy, highest temperature differential, and lowest tool wear.")
+        st.caption("State: Stable, low-stress operating regime; optimal operating condition.")
 
     st.markdown("### Why the data matters")
     st.markdown("""
-    - Temperature gap helps signal heat buildup or cooling inefficiency.
-    - Rotational speed and torque together describe the machine's workload.
-    - Tool wear reveals how much mechanical degradation has accumulated.
-    - The plot shows where the current operating point sits compared with historical patterns.
+    - Power proxy indicates how hard the machine is working; higher values can signal heavier load.
+    - Temperature differential helps detect cooling efficiency and machine stress.
+    - Tool wear shows accumulated degradation and maintenance urgency.
+    - These summaries help identify normal behavior, degraded states, and outliers needing inspection.
     """)
 
     st.markdown("### Practical business value")
@@ -689,9 +850,9 @@ def main():
     # Load models with caching and fallback
     with st.spinner("Loading ML models..."):
         pipeline = load_preprocessing_pipeline()
-        kmeans_model = load_kmeans_model()
+        cluster_model = load_cluster_model()
     
-    if pipeline is None or kmeans_model is None:
+    if pipeline is None or cluster_model is None:
         st.warning(
             "⚠️ Note: Models loaded in fallback/demo mode. "
             "Real predictions will be mocked until trained models are available."
@@ -703,6 +864,7 @@ def main():
     
     # Get manual telemetry input from sidebar
     sensor_data = render_sidebar_telemetry_controls()
+    show_debug = st.sidebar.checkbox("Show prediction debug", value=False)
     
     # ========================================================================
     # MAIN DASHBOARD
@@ -714,7 +876,6 @@ def main():
         # Placeholder for dynamic updates
         status_placeholder = st.empty()
         metrics_placeholder = st.empty()
-        plot_placeholder = st.empty()
 
         # Start the stream loop if enabled
         if enable_stream:
@@ -731,7 +892,7 @@ def main():
 
                     # Make prediction
                     cluster_id, risk_label, risk_color = predict_cluster(
-                        sensor_data, pipeline, kmeans_model
+                        sensor_data, pipeline, cluster_model
                     )
 
                     # Update UI components
@@ -740,9 +901,6 @@ def main():
 
                     with metrics_placeholder.container():
                         render_telemetry_metrics(sensor_data)
-
-                    with plot_placeholder.container():
-                        render_interactive_scatter_plot(sensor_data)
 
                     # Log stream event
                     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -767,9 +925,14 @@ def main():
             # Standard mode: display user-controlled data
 
             # Predict cluster for current sensor data
-            cluster_id, risk_label, risk_color = predict_cluster(
-                sensor_data, pipeline, kmeans_model
-            )
+            if show_debug:
+                cluster_id, risk_label, risk_color, debug_info = predict_cluster(
+                    sensor_data, pipeline, cluster_model, debug=True
+                )
+            else:
+                cluster_id, risk_label, risk_color = predict_cluster(
+                    sensor_data, pipeline, cluster_model
+                )
 
             # Render operational status card
             with status_placeholder.container():
@@ -778,9 +941,9 @@ def main():
             with metrics_placeholder.container():
                 render_telemetry_metrics(sensor_data)
 
-            # Render interactive scatter plot
-            with plot_placeholder.container():
-                render_interactive_scatter_plot(sensor_data)
+            if show_debug:
+                st.subheader("🔍 Prediction Debug")
+                st.json(debug_info)
 
     with tab_guidance:
         render_cluster_guidance_tab()
@@ -792,7 +955,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #888; font-size: 0.9em;'>
-    <p>🔬 Predictive Maintenance Clustering System | AI4I 2020 Dataset | K-Means Clustering</p>
+    <p>🔬 Predictive Maintenance Clustering System | AI4I 2020 Dataset | DBSCAN Clustering</p>
     <p><em>Real-time machine monitoring for proactive maintenance interventions</em></p>
     <p><em>Christopher Lopez - AIM PGD AI and ML June 2025 - July 2026</em></p>
     </div>

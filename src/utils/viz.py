@@ -126,8 +126,8 @@ def plot_variable_summary(df: pd.DataFrame, features=None, figsize: tuple = (16,
         ax.remove()
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
-    if show:
-        plt.show()
+    #if show:
+    #    plt.show()
 
     return fig
 
@@ -165,8 +165,8 @@ def plot_clustering_tendency_preview(df: pd.DataFrame, features=None, figsize: t
     ax.grid(alpha=0.2)
 
     plt.tight_layout()
-    if show:
-        plt.show()
+    #if show:
+     #   plt.show()
 
     return fig, X_pca
 
@@ -218,7 +218,7 @@ def plot_selected_feature_distributions(df: pd.DataFrame, features=None, figsize
         axes.set_ylabel("")
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
-    if show:
-        plt.show()
+    #if show:
+     #   plt.show()
 
     return fig
